@@ -1,13 +1,24 @@
 <template>
   <!--
     MarkdownViewer 组件
-    负责渲染已解析的 Markdown HTML，同时处理 KaTeX 公式的样式优化
-    核心逻辑：
-      1. v-html 渲染 markdown-it + markdown-it-katex 生成的 HTML
-      2. KaTeX 公式样式通过全局 CSS 处理
-      3. nextTick 后扫描 .katex-display 确保居中和间距正确
+    负责渲染已解析的 Markdown HTML，同时处理 KaTeX 公式样式优化
+
+    【渲染链路】
+      useMarkdown.parseMarkdown() 输入 Markdown
+         │
+         ▼
+      markdown-it + katex 插件生成 HTML（含 .katex 类名）
+         │
+         ▼
+      DOMPurify.sanitize() 净化 HTML
+         │
+         ▼
+      v-html="content" 渲染到 DOM ← 当前组件这一步
+         │
+         ▼
+      浏览器读取 KaTeX CSS → 公式渲染完成
   -->
-  <div ref="viewerRef" class="markdown-body" v-html="content" />
+  <div class="markdown-body" v-html="sanitizedContent" />
 </template>
 
 <script setup>
@@ -15,91 +26,78 @@
  * MarkdownViewer 组件
  *
  * Props:
- *   - content: markdown-it 解析后的 HTML 字符串（已含 KaTeX 渲染结果）
+ *   - content: markdown-it 解析后的 HTML 字符串
+ *              （已含 KaTeX 公式 HTML + DOMPurify 净化后）
  *
- * 工作原理：
- *   markdown-it + markdown-it-katex 在 useMarkdown.parseMarkdown() 中已经完成了
- *   所有的解析工作（Markdown → HTML + LaTeX → KaTeX HTML）。本组件只负责：
- *   1. v-html 渲染结果
- *   2. 渲染后做一些样式微调（如居中公式的 margin、代码块阴影等）
+ * 【为什么不需要 renderMathInElement？】
  *
- * 为什么不用 renderMathInElement：
- *   因为 markdown-it-katex 在解析阶段已经调用了 KaTeX，无需二次扫描。
- *   但在某些场景（如流式输出/nextTick 更新）下，如果需要额外处理，
- *   可以取消下方 nextTick 块的注释。
+ *   很多教程会建议在 v-html 后用 renderMathInElement() 扫描 DOM 并渲染公式。
+ *   但我们的架构不需要这么做：
+ *
+ *   renderMathInElement 适用于「公式文本直接写在 HTML 里」的场景（如 VuePress 插件），
+ *   它会：遍历文本节点 → 检测 $...$ → 调用 KaTeX → 替换为 HTML。
+ *
+ *   我们的架构中：
+ *   markdown-it-katex 已经在 md.render() 阶段完成了公式→HTML 的转换，
+ *   输出的 HTML 已经包含 <span class="katex">...</span>，浏览器加载
+ *   katex.min.css 后自动渲染，无需二次扫描。
+ *
+ *   这也是为什么 KaTeX CSS 必须在 main.js 中引入 —— CSS 负责最终渲染。
  */
-import { ref, watch, nextTick } from 'vue'
+import { computed } from 'vue'
+import DOMPurify from 'isomorphic-dompurify'
 
 const props = defineProps({
   /**
    * 已解析的 HTML 内容字符串
-   * 由 useMarkdown().parseMarkdown() 生成
+   * 由 useMarkdown.parseMarkdown() 生成（已含 KaTeX HTML + DOMPurify 净化）
    */
   content: { type: String, default: '' },
 })
 
-const viewerRef = ref(null)
-
 /**
- * 渲染后处理：优化 KaTeX 和代码块的样式
- * 在 nextTick 中执行，确保 DOM 已更新
+ * 安全内容计算属性
+ *
+ * 【防御性编程】
+ *   虽然 useMarkdown.parseMarkdown() 已经调用了 DOMPurify.sanitize()，
+ *   这里再做一次净化作为纵深防御（defense in depth）。
+ *   即使 props.content 来源被绕过，也能兜底保护。
  */
-watch(
-  () => props.content,
-  async () => {
-    await nextTick()
-    applyStyles()
-  },
-  { immediate: true }
-)
-
-/**
- * 为特定元素应用样式微调
- */
-function applyStyles() {
-  if (!viewerRef.value) return
-
-  // 确保块级公式（$$...$$）居中且有适当间距
-  const displays = viewerRef.value.querySelectorAll('.katex-display')
-  displays.forEach((el) => {
-    el.classList.add('katex-display-wrapper')
-    // 确保不超出容器
-    el.style.overflowX = 'auto'
-    el.style.overflowWrap = 'break-word'
+const sanitizedContent = computed(() => {
+  if (!props.content) return ''
+  // 保留 KaTeX 需要的 class 属性，其他危险内容全部过滤
+  return DOMPurify.sanitize(props.content, {
+    ADD_TAGS: ['span', 'div'],
+    ADD_ATTR: ['class', 'id', 'target', 'rel', 'style'],
   })
-
-  // 为块级代码添加暗色主题背景（暗色模式下）
-  const pres = viewerRef.value.querySelectorAll('pre')
-  pres.forEach((el) => {
-    // hljs 代码块已有暗色背景，这里确保圆角和阴影
-    if (!el.classList.contains('hljs')) {
-      el.classList.add('!bg-slate-900/80', '!rounded-xl')
-    }
-  })
-}
+})
 </script>
 
 <style scoped>
 /**
- * KaTeX 行内公式样式微调
- * 确保在各种字体大小下都正常显示
+ * KaTeX 行内公式样式
+ * 当浏览器加载 katex/dist/katex.min.css 后，
+ * 所有 class="katex" 的元素会自动获得字体和颜色
  */
 :deep(.katex) {
   font-size: 1em;
 }
 
 /**
- * KaTeX 块级公式样式微调
- * 在深色背景下适当调整颜色
+ * KaTeX 块级公式（$$...$$）样式
+ * 这类公式在 HTML 中是 <div class="katex-display"> 包裹
+ * 样式在 style.css 的全局 .katex-display 中定义
+ * 此处 scoped 样式确保行内公式（.katex）颜色与正文协调
  */
 :deep(.dark .katex-display) {
   color: inherit;
 }
 
 /**
- * 代码块中的 KaTeX 排除处理
- * 注意：markdown-it-katex 使用 fence 规则不处理代码块
- * 这里双重保险，确保代码块内无 KaTeX 干扰
+ * 代码块中的 KaTeX 排除
+ *
+ * markdown-it-katex 使用 fence 规则，不处理代码块内的 $ 符号。
+ * 这里双重保险：即使有误判，也确保代码块中不显示 KaTeX 样式。
  */
 :deep(pre code .katex),
 :deep(code .katex) {
