@@ -1,26 +1,77 @@
 /**
  * useMarkdown.js
- * Composable：封装 marked v18 + highlight.js 解析逻辑
+ * Composable：封装 markdown-it 14.x + markdown-it-katex + highlight.js 解析逻辑
  *
- * marked v18 API 变更摘要：
- * - new Marked() + Marked.use({ renderer }) 替代 marked.setOptions()
- * - renderer 方法参数从 positional 改为对象解构
- * - heading: { tokens, depth } → 用 this.parser.parseInline(tokens) 渲染内联内容
- * - code:    { text, lang, escaped }
- * - link:    { href, title, tokens }
+ * 技术选型说明：
+ * - markdown-it: 主流 Markdown 解析器，插件生态丰富
+ * - markdown-it-katex: KaTeX 官方插件，支持 $...$ 和 $$...$$ 语法
+ * - KaTeX: 比 MathJax 渲染速度更快，适合前端阅读场景
+ *
+ * 注意事项：
+ * - markdown-it-katex 使用 `fence` 规则排除代码块，代码中的 $ 符号不会误判为公式
+ * - throwOnError: false 确保无效 LaTeX 不会崩溃，而是显示错误样式
  */
 
-import { Marked, lexer, Parser } from 'marked'
+import MarkdownIt from 'markdown-it'
+import mk from 'markdown-it-katex'
 import hljs from 'highlight.js'
 
 // ============================================================
-// 实例化 Marked（v18 推荐方式）
+// 初始化 markdown-it 实例
 // ============================================================
-const markedInstance = new Marked({
-  // gfm: true（默认），breaks: true（单回车转 <br>）
-  breaks: true,
-  gfm: true,
+const md = new MarkdownIt({
+  html: true,         // 允许 HTML 标签
+  linkify: true,     // 自动识别链接
+  typographer: true, // 智能标点转换
+  breaks: true,      // 单回车转 <br>
+  highlight: (str, lang) => {
+    // highlight.js 语法高亮
+    const langLabel = lang
+      ? `<span class="absolute top-3 right-4 text-xs font-mono opacity-50 uppercase tracking-wider select-none">${lang}</span>`
+      : ''
+    let highlighted
+    try {
+      if (lang && hljs.getLanguage(lang)) {
+        highlighted = hljs.highlight(str, { language: lang, ignoreIllegals: true }).value
+      } else {
+        highlighted = hljs.highlightAuto(str).value
+      }
+    } catch {
+      highlighted = str
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+    }
+    return `<div class="relative">
+  ${langLabel}
+  <pre class="!mt-0 !bg-slate-900/80 !rounded-xl !p-0 !overflow-visible"><code class="hljs ${lang ? `language-${lang}` : ''}">${highlighted}</code></pre>
+</div>`
+  },
 })
+
+// ============================================================
+// 注册 markdown-it-katex 插件
+// KaTeX 选项：
+//   - throwOnError: false → 无效 LaTeX 显示错误样式而非崩溃
+//   - errorColor: 自定义错误颜色（配合 Tailwind 的 text-red-500）
+//   - trust: true → 允许所有 KaTeX 命令（注意安全，生产环境可设为 false）
+// ============================================================
+md.use(mk, {
+  throwOnError: false,
+  errorColor: '#ef4444',
+  trust: true,
+  // 指定 LaTeX 定界符：支持 $$...$$、$...$、\[...\]、\(...\)
+  delimiters: [
+    { left: '$$', right: '$$', display: true },
+    { left: '$', right: '$', display: false },
+    { left: '\\[', right: '\\]', display: true },
+    { left: '\\(', right: '\\)', display: false },
+  ],
+})
+
+// ============================================================
+// 工具函数
+// ============================================================
 
 /**
  * 生成标题锚点 id
@@ -36,79 +87,52 @@ function makeAnchor(text) {
 }
 
 // ============================================================
-// 使用 Marked.use() 扩展渲染器（v18 推荐扩展方式）
+// 自定义渲染规则
 // ============================================================
-markedInstance.use({
-  renderer: {
-    /**
-     * 标题渲染
-     * @param {{ tokens: Array, depth: number }} token
-     */
-    heading(token) {
-      const { tokens, depth } = token
-      // 将内联 tokens 渲染为 HTML（保留粗体/斜体等格式）
-      const text = this.parser.parseInline(tokens)
-      const anchor = makeAnchor(text.replace(/<[^>]+>/g, ''))
-      return `<h${depth} id="${anchor}" class="group">
-  ${text}
-  <a href="#${anchor}" class="anchor-link">#</a>
-</h${depth}>\n`
-    },
 
-    /**
-     * 代码块渲染（语法高亮）
-     * @param {{ text: string, lang: string|undefined }} token
-     */
-    code(token) {
-      const { text, lang } = token
-      const validLang = lang && hljs.getLanguage(lang)
-      const langLabel = lang
-        ? `<span class="absolute top-3 right-4 text-xs font-mono opacity-50 uppercase tracking-wider select-none">${lang}</span>`
-        : ''
-      let highlighted
-      try {
-        highlighted = validLang
-          ? hljs.highlight(text, { language: lang, ignoreIllegals: true }).value
-          : hljs.highlightAuto(text).value
-      } catch {
-        highlighted = text
-          .replace(/&/g, '&amp;')
-          .replace(/</g, '&lt;')
-          .replace(/>/g, '&gt;')
-      }
-      return `<div class="relative">
-  ${langLabel}
-  <pre><code class="hljs${validLang ? ` language-${lang}` : ''}">${highlighted}</code></pre>
-</div>\n`
-    },
+/**
+ * 标题渲染规则：为 H1-H6 添加 id 锚点，便于目录跳转
+ * 使用 renderer.rules.heading_open 扩展（markdown-it 标准扩展方式）
+ */
+md.renderer.rules.heading_open = (tokens, idx, _options, _env, self) => {
+  const token = tokens[idx]
+  // 找到对应的 inline token 获取标题纯文本
+  const nextToken = tokens[idx + 1]
+  const text = nextToken && nextToken.content ? nextToken.content : ''
+  const anchor = makeAnchor(text)
+  // 直接修改 token 属性，markdown-it 自动渲染到 HTML
+  token.attrSet('id', anchor)
+  // 委托给默认渲染器输出 <hN id="...">
+  return self.renderToken(tokens, idx, _options)
+}
 
-    /**
-     * 链接渲染：外部链接在新标签页打开
-     * @param {{ href: string, title: string|null, tokens: Array }} token
-     */
-    link(token) {
-      const { href, title, tokens } = token
-      const text = this.parser.parseInline(tokens)
-      const isExternal = href && (href.startsWith('http://') || href.startsWith('https://'))
-      const attrs = isExternal ? ' target="_blank" rel="noopener noreferrer"' : ''
-      const titleAttr = title ? ` title="${title}"` : ''
-      return `<a href="${href}"${titleAttr}${attrs}>${text}</a>`
-    },
-  },
-})
+/**
+ * 链接渲染：外部链接在新标签页打开
+ */
+const defaultLinkRender = md.renderer.rules.link_open || function (tokens, idx, options, env, self) {
+  return self.renderToken(tokens, idx, options)
+}
+md.renderer.rules.link_open = (tokens, idx, options, env, self) => {
+  const href = tokens[idx].attrGet('href')
+  if (href && (href.startsWith('http://') || href.startsWith('https://'))) {
+    tokens[idx].attrPush(['target', '_blank'])
+    tokens[idx].attrPush(['rel', 'noopener noreferrer'])
+  }
+  return defaultLinkRender(tokens, idx, options, env, self)
+}
 
 // ============================================================
 // Composable
 // ============================================================
 export function useMarkdown() {
   /**
-   * Markdown → HTML
+   * Markdown → HTML（含 KaTeX 公式渲染）
    * @param {string} markdownText
    */
   const parseMarkdown = (markdownText) => {
     if (!markdownText) return ''
     try {
-      return markedInstance.parse(markdownText)
+      return md.render(markdownText)
     } catch (err) {
       console.error('[useMarkdown] 解析失败:', err)
       return `<p style="color:#ef4444">解析失败: ${err.message}</p>`
@@ -116,31 +140,38 @@ export function useMarkdown() {
   }
 
   /**
-   * 从 Markdown 提取标题目录
-   * 使用 marked v18 独立的 lexer 函数
+   * 从 Markdown 提取标题目录（用于侧边栏）
    * @param {string} markdownText
-   * @returns {Array<{ level, text, anchor, id }>}
+   * @returns {Array<{ level: number, text: string, anchor: string, id: string }>}
    */
   const extractToc = (markdownText) => {
     if (!markdownText) return []
     const headings = []
-    const parser = new Parser()
     try {
-      const tokens = lexer(markdownText)
-      tokens.forEach((token) => {
-        if (token.type === 'heading') {
-          // 使用 Parser.parseInline 将内联 tokens 渲染为带格式的 HTML
-          const renderedText = parser.parseInline(token.tokens)
-          // 剥去 HTML 标签得到纯文本用于锚点和显示
-          const cleanText = renderedText.replace(/<[^>]+>/g, '')
-          headings.push({
-            level: token.depth,
-            text: cleanText,
-            anchor: makeAnchor(cleanText),
-            id: `toc-${makeAnchor(cleanText)}-${headings.length}`,
-          })
+      const env = {}
+      // 解析获取 token 列表，提取 heading 节点
+      const tokens = md.parse(markdownText, env)
+      for (let i = 0; i < tokens.length; i++) {
+        if (tokens[i].type === 'heading_open') {
+          const depth = parseInt(tokens[i].tag.slice(1))
+          // 下一个 token 是 inline 类型，包含标题文本
+          const inlineToken = tokens[i + 1]
+          if (inlineToken && inlineToken.type === 'inline') {
+            const text = (inlineToken.children || [])
+              .map(c => c.content)
+              .join('')
+            if (text) {
+              const anchor = makeAnchor(text)
+              headings.push({
+                level: depth,
+                text,
+                anchor,
+                id: `toc-${anchor}-${headings.length}`,
+              })
+            }
+          }
         }
-      })
+      }
     } catch (err) {
       console.warn('[useMarkdown] 目录提取失败:', err)
     }

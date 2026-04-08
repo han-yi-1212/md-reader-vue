@@ -24,10 +24,10 @@
 
     <!-- Markdown 渲染区域 -->
     <div class="flex-1 overflow-y-auto">
-      <!-- 有内容时渲染 HTML -->
-      <div
+      <!-- 有内容时使用 MarkdownViewer 组件渲染 -->
+      <MarkdownViewer
         v-if="htmlContent"
-        v-html="htmlContent"
+        :content="htmlContent"
         class="prose prose-slate dark:prose-invert max-w-none
                px-6 py-8 md:px-10 animate-fade-in"
       />
@@ -63,6 +63,7 @@
  */
 import { ref, watch, nextTick, onMounted, onUnmounted } from 'vue'
 import { Eye, FileText } from 'lucide-vue-next'
+import MarkdownViewer from './MarkdownViewer.vue'
 
 const props = defineProps({
   htmlContent: { type: String, default: '' },

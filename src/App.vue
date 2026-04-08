@@ -324,6 +324,7 @@ print([fibonacci(i) for i in range(10)])
 | 暗黑模式 | ✅ | 一键切换 |
 | 文件拖拽 | ✅ | 拖入即加载 |
 | 分屏编辑 | ✅ | 可调整比例 |
+| LaTeX 公式 | ✅ | KaTeX 渲染 $...$ 和 $$...$$ |
 
 ### 🌙 暗黑模式
 
@@ -345,7 +346,45 @@ print([fibonacci(i) for i in range(10)])
 - [x] 代码语法高亮
 - [x] 目录自动生成
 - [x] 暗黑模式
+- [x] LaTeX 数学公式
 - [ ] 更多功能待开发...
+
+---
+
+## 📐 LaTeX 数学公式
+
+### 行内公式
+
+质能守恒方程 $E = mc^2$，欧拉公式 $e^{i\pi} + 1 = 0$。
+
+行内积分示例：$\int_{a}^{b} f(x) \, dx = F(b) - F(a)$
+
+### 块级公式（居中显示）
+
+勾股定理：
+
+$$
+a^2 + b^2 = c^2
+$$
+
+薛定谔方程：
+
+$$
+i\hbar\frac{\partial}{\partial t}\Psi(\mathbf{r},t) = \left[-\frac{\hbar^2}{2m}\nabla^2 + V(\mathbf{r},t)\right]\Psi(\mathbf{r},t)
+$$
+
+矩阵示例：
+
+$$
+\mathbf{A} = \begin{pmatrix}
+a_{11} & a_{12} \\
+a_{21} & a_{22}
+\end{pmatrix}
+$$
+
+### 反斜杠括号
+
+使用 \\( ... \\) 行内公式：\\( \sum_{i=1}^{n} x_i \\)
 
 ---
 

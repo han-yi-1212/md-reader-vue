@@ -332,6 +332,50 @@ body {
 }
 
 /* ==========================================
+   KaTeX 公式样式优化
+   ========================================== */
+
+/* 块级公式（$$...$$）容器：居中 + 适当间距 */
+.katex-display {
+  margin: 1.5rem 0 !important;
+  text-align: center;
+  overflow-x: auto;
+  overflow-wrap: break-word;
+  padding: 0.5rem 0;
+}
+
+/* 确保 KaTeX 公式不溢出容器 */
+.katex-display > .katex {
+  max-width: 100%;
+  overflow-x: visible;
+  overflow-wrap: break-word;
+}
+
+/* KaTeX 错误样式（throwOnError: false 时显示） */
+.katex-error {
+  color: #ef4444 !important;
+  font-size: 0.9em;
+  background: rgba(239, 68, 68, 0.1);
+  padding: 0.25rem 0.5rem;
+  border-radius: 4px;
+  border: 1px solid rgba(239, 68, 68, 0.3);
+}
+
+/* 暗色模式下 KaTeX 公式颜色微调 */
+.dark .katex {
+  color: inherit;
+}
+
+/* 确保 KaTeX 和 highlight.js 代码块不互相干扰 */
+code .katex,
+pre .katex {
+  background: transparent !important;
+  padding: 0 !important;
+  border: none !important;
+  font-size: inherit;
+}
+
+/* ==========================================
    响应式：小屏隐藏侧边栏
    ========================================== */
 @media (max-width: 768px) {

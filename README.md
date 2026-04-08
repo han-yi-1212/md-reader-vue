@@ -16,6 +16,7 @@
 | 📑 **目录导航** | 自动解析标题生成侧边栏，点击平滑滚动定位 |
 | 🎨 **代码高亮** | 基于 highlight.js，支持 190+ 编程语言 |
 | 🌙 **暗黑模式** | 一键切换亮/暗主题，自动记忆用户偏好 |
+| 📐 **LaTeX 公式** | 支持 $...$ 行内公式和 $$...$$ 块级公式（KaTeX 渲染） |
 | 📱 **响应式设计** | 适配桌面端和移动端 |
 
 ---
@@ -33,7 +34,8 @@
 - **框架**：Vue 3 + Composition API + `<script setup>`
 - **构建工具**：Vite 5
 - **样式**：Tailwind CSS v4
-- **Markdown 解析**：marked v18
+- **Markdown 解析**：markdown-it v14
+- **数学公式**：KaTeX + markdown-it-katex
 - **代码高亮**：highlight.js
 - **图标**：Lucide Vue Next
 
@@ -111,13 +113,24 @@ md-reader-vue/
 
 ## 🔧 配置说明
 
-### marked v18 自定义渲染
+### markdown-it 自定义渲染
 
 项目已配置以下增强：
 
 - **标题锚点**：自动为 H1-H6 添加 `id` 属性，便于目录跳转
 - **外链新窗口**：所有外部链接在「新标签页」打开
 - **代码块高亮**：集成 highlight.js，支持语言自动检测
+- **LaTeX 公式**：markdown-it-katex 插件，支持 $...$ 和 $$...$$ 语法
+
+### KaTeX 配置说明
+
+```javascript
+md.use(mk, {
+  throwOnError: false,  // 无效 LaTeX 显示错误样式，不崩溃
+  errorColor: '#ef4444', // 错误提示颜色
+  trust: true,            // 允许所有 KaTeX 命令
+})
+```
 
 ### 暗黑模式
 
