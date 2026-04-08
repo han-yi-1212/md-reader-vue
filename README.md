@@ -27,15 +27,15 @@
   <img src="https://img.shields.io/badge/Vue-3-42b883?logo=vue.js" alt="Vue">
   <img src="https://img.shields.io/badge/Vite-5-646cff?logo=vite" alt="Vite">
   <img src="https://img.shields.io/badge/Tailwind_CSS-4-38bdf8?logo=tailwindcss" alt="Tailwind">
-  <img src="https://img.shields.io/badge/marked-v18-ec4a47?logo=markdown" alt="marked">
   <img src="https://img.shields.io/badge/highlight.js-11-3572A5?logo=javascript" alt="highlight.js">
+  <img src="https://img.shields.io/badge/KaTeX-matH-b15C89?logo=katex" alt="KaTeX">
 </p>
 
 - **框架**：Vue 3 + Composition API + `<script setup>`
 - **构建工具**：Vite 5
 - **样式**：Tailwind CSS v4
 - **Markdown 解析**：markdown-it v14
-- **数学公式**：KaTeX + markdown-it-katex
+- **数学公式**：KaTeX + auto-render（DOM 扫描渲染）
 - **代码高亮**：highlight.js
 - **图标**：Lucide Vue Next
 
@@ -120,15 +120,25 @@ md-reader-vue/
 - **标题锚点**：自动为 H1-H6 添加 `id` 属性，便于目录跳转
 - **外链新窗口**：所有外部链接在「新标签页」打开
 - **代码块高亮**：集成 highlight.js，支持语言自动检测
-- **LaTeX 公式**：markdown-it-katex 插件，支持 $...$ 和 $$...$$ 语法
 
-### KaTeX 配置说明
+### LaTeX 公式渲染（KaTeX + auto-render）
+
+采用两阶段架构：
+
+1. **Stage 1**：markdown-it 将 Markdown 解析为 HTML（LaTeX 公式保持为源码文本）
+2. **Stage 2**：auto-render 扫描 DOM 文本节点，将 `$...$` / `$$...$$` / `\[...\]` / `\(...\)` 替换为 KaTeX HTML
 
 ```javascript
-md.use(mk, {
+// auto-render 配置（MarkdownViewer.vue）
+autoRender(viewerRef.value, {
+  delimiters: [
+    { left: '$$', right: '$$', display: true },
+    { left: '$', right: '$', display: false },
+    { left: '\\[', right: '\\]', display: true },
+    { left: '\\(', right: '\\)', display: false },
+  ],
   throwOnError: false,  // 无效 LaTeX 显示错误样式，不崩溃
-  errorColor: '#ef4444', // 错误提示颜色
-  trust: true,            // 允许所有 KaTeX 命令
+  trust: true,          // ⚠️ 生产环境建议设为 false
 })
 ```
 
