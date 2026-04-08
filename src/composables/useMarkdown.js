@@ -1,55 +1,54 @@
 /**
  * useMarkdown.js
- * Composable：封装 markdown-it 14.x + highlight.js 解析逻辑
+ * Composable：封装 marked 18.x + KaTeX 直接渲染 + highlight.js 解析逻辑
  *
- * 【公式渲染流程 - 两阶段架构】
+ * 【公式渲染流程 - 占位符法】
  *
- *   Stage 1: Markdown 解析（当前文件）
+ *   Stage 1: 公式提取与占位符保护
  *   ┌──────────────────────────┐
- *   │  markdown-it 解析        │ ← $...$ 和 $$...$$ 作为普通文本通过
- *   │  Markdown → HTML         │   （不被识别为公式，保持为源码）
+ *   │  提取 $...$ 和 $$...$$   │ ← 用唯一占位符替换公式
  *   └──────────┬───────────────┘
- *              │ 输出 HTML（含 "$E = mc^2$" 文本）
+ *              │
  *              ▼
- *   Stage 2: 公式渲染（MarkdownViewer.vue）
+ *   Stage 2: marked 解析 Markdown
  *   ┌──────────────────────────┐
- *   │  v-html 渲染 HTML        │
+ *   │  Markdown → HTML         │ ← 公式被保护，不会被 Markdown 解析
  *   └──────────┬───────────────┘
- *              │ DOM 节点（含 "$...$" 文本）
+ *              │
  *              ▼
+ *   Stage 3: 公式恢复与 KaTeX 渲染
  *   ┌──────────────────────────┐
- *   │  auto-render (KaTeX)    │ ← 扫描文本节点，检测 $...$ / $$...$$
- *   │  替换为 KaTeX HTML      │   调用 katex.renderToString() 渲染
+ *   │  占位符 → KaTeX HTML    │ ← 直接调用 katex.renderToString()
  *   └──────────┬───────────────┘
- *              │ 公式 HTML
+ *              │
  *              ▼
- *   浏览器 + KaTeX CSS → 渲染公式
+ *   Stage 4: DOMPurify 净化
+ *   ┌──────────────────────────┐
+ *   │  XSS 防护               │
+ *   └──────────┬───────────────┘
+ *              │
+ *              ▼
+ *   v-html → 浏览器渲染
  *
- * 为什么不用 markdown-it-katex？
- *   因为 markdown-it-katex 2.0.x 与 markdown-it 14.x 不兼容，
- *   插件的 block/inline 规则未正确注册，导致公式完全无法识别。
- *
- * 替代方案：auto-render
- *   这是 KaTeX 官方的 DOM 扫描渲染工具，与任何 Markdown 解析器无关，
- *   只负责在已渲染的 DOM 中找公式分隔符并替换为 HTML。
+ * 为什么用占位符法？
+ *   1. marked-katex-extension 在多个 $...$ 时边界检测有问题
+ *   2. 占位符法完全不依赖 marked 的公式处理
+ *   3. 直接调用 katex.renderToString() 更可靠
  */
 
-import MarkdownIt from 'markdown-it'
+import { marked } from 'marked'
+import katex from 'katex'
 import hljs from 'highlight.js'
 import DOMPurify from 'isomorphic-dompurify'
 
 // ============================================================
-// 初始化 markdown-it 实例
+// 初始化 marked 实例（不包含 KaTeX 插件）
 // ============================================================
-const md = new MarkdownIt({
-  html: true,         // 允许 HTML 标签
-  linkify: true,     // 自动识别链接
-  typographer: true,  // 智能标点转换
-  breaks: true,       // 单回车转 <br>
+
+// 配置 marked
+marked.use({
+  // 语法高亮
   highlight: (str, lang) => {
-    // ── 语法高亮 ──
-    // highlight.js 扫描代码块中的语言标记，在渲染前替换语言。
-    // 注意：代码块内的 $ 符号是纯文本，不会被公式引擎处理。
     const langLabel = lang
       ? `<span class="absolute top-3 right-4 text-xs font-mono opacity-50 uppercase tracking-wider select-none">${lang}</span>`
       : ''
@@ -77,7 +76,7 @@ const md = new MarkdownIt({
 // DOMPurify 配置（XSS 防护）
 //
 // 【安全说明】
-//   markdown-it 的 html: true 允许用户编写原始 HTML。
+//   marked 的 html: true 允许用户编写原始 HTML。
 //   v-html 会原样渲染这些 HTML，因此必须净化。
 // ============================================================
 const DOMPURIFY_CONFIG = {
@@ -89,8 +88,108 @@ const DOMPURIFY_CONFIG = {
 const sanitize = (dirty) => DOMPurify.sanitize(dirty, DOMPURIFY_CONFIG)
 
 // ============================================================
-// 工具函数
+// KaTeX 配置
 // ============================================================
+const KATEX_OPTIONS = {
+  throwOnError: false,   // 无效 LaTeX 优雅降级，不崩溃
+  errorColor: '#ef4444', // 错误时显示红色
+  strict: false,         // 允许所有 KaTeX 命令
+  trust: true,           // ⚠️ 生产环境建议设为 false
+  displayMode: false,    // 默认行内模式
+}
+
+// ============================================================
+// 公式处理：占位符法
+// ============================================================
+
+let placeholderCounter = 0
+
+/**
+ * 生成唯一的占位符
+ */
+function makePlaceholder() {
+  return `\x00KATEX_PLACEHOLDER_${++placeholderCounter}\x00`
+}
+
+/**
+ * 提取并渲染所有公式（$...$ 和 $$...$$）
+ * 
+ * 【占位符法原理】
+ *   1. 匹配所有 $...$ 和 $$...$$
+ *   2. 用唯一占位符替换公式内容
+ *   3. 让 marked 处理剩余的 Markdown（公式被保护）
+ *   4. 将占位符替换为已渲染的 KaTeX HTML
+ * 
+ * @param {string} text 原始 Markdown 文本
+ * @returns {{ text: string, formulas: Map<string, { latex: string, html: string }> }}
+ */
+function extractAndRenderFormulas(text) {
+  if (!text) return { text: '', formulas: new Map() }
+
+  const formulas = new Map()
+  let result = text
+  let counter = 0
+
+  // 匹配公式：块级 $$...$$ 和 行内 $...$
+  // 使用 [\s\S]*? 非贪婪匹配，正确处理多行公式
+  // 负向前瞻 (?!\$) 确保不匹配 $$ 后紧跟 $ 的情况
+  const formulaPattern = /(\$\$[\s\S]*?\$\$)|(\$(?!\$)(?:[^\$\\]|(?:\\.)|(?:\{[^}]*\}))*?\$)/g
+
+  // 按出现顺序处理，从后往前替换（保持位置正确）
+  const matches = []
+  let match
+
+  while ((match = formulaPattern.exec(text)) !== null) {
+    matches.push({
+      fullMatch: match[0],
+      index: match.index,
+      length: match[0].length,
+      isBlock: match[0].startsWith('$$'),
+    })
+  }
+
+  // 从后往前替换
+  for (let i = matches.length - 1; i >= 0; i--) {
+    const m = matches[i]
+    const latex = m.fullMatch.slice(m.isBlock ? 2 : 1, m.isBlock ? -2 : -1)
+
+    // 预处理：折叠公式内的换行符为空格
+    const processedLatex = latex.replace(/\r?\n/g, ' ')
+
+    // 渲染为 KaTeX HTML
+    try {
+      const html = katex.renderToString(processedLatex, {
+        ...KATEX_OPTIONS,
+        displayMode: m.isBlock,
+      })
+
+      const placeholder = `\x00KATEX_PH_${++counter}\x00`
+      const before = result.slice(0, m.index)
+      const after = result.slice(m.index + m.length)
+      result = before + placeholder + after
+
+      formulas.set(placeholder, html)
+    } catch (err) {
+      console.warn('[KaTeX] 渲染失败:', err.message, '公式:', processedLatex.slice(0, 50))
+    }
+  }
+
+  return { text: result, formulas }
+}
+
+/**
+ * 恢复公式（将占位符替换为 KaTeX HTML）
+ */
+function restoreFormulas(html, formulas) {
+  if (!formulas || formulas.size === 0) return html
+
+  let result = html
+  for (const [placeholder, katexHtml] of formulas) {
+    result = result.split(placeholder).join(katexHtml)
+  }
+
+  return result
+}
 
 /**
  * 生成标题锚点 id
@@ -104,45 +203,14 @@ function makeAnchor(text) {
 }
 
 // ============================================================
-// 自定义渲染规则
-// ============================================================
-
-/**
- * 标题渲染：为 H1-H6 添加 id 锚点，便于目录跳转
- */
-md.renderer.rules.heading_open = (tokens, idx, _options, _env, self) => {
-  const token = tokens[idx]
-  const nextToken = tokens[idx + 1]
-  const text = nextToken && nextToken.content ? nextToken.content : ''
-  const anchor = makeAnchor(text)
-  token.attrSet('id', anchor)
-  return self.renderToken(tokens, idx, _options)
-}
-
-/**
- * 链接渲染：外部链接在新标签页打开
- */
-const defaultLinkRender = md.renderer.rules.link_open || function (tokens, idx, options, env, self) {
-  return self.renderToken(tokens, idx, options)
-}
-md.renderer.rules.link_open = (tokens, idx, options, env, self) => {
-  const href = tokens[idx].attrGet('href')
-  if (href && (href.startsWith('http://') || href.startsWith('https://'))) {
-    tokens[idx].attrPush(['target', '_blank'])
-    tokens[idx].attrPush(['rel', 'noopener noreferrer'])
-  }
-  return defaultLinkRender(tokens, idx, options, env, self)
-}
-
-// ============================================================
 // Composable
 // ============================================================
 export function useMarkdown() {
   /**
    * Markdown → 安全 HTML
    *
-   * 【关键】LaTeX 公式分隔符（$...$ / $$...$$）会原样保留在 HTML 中，
-   * 作为普通文本节点。后续由 MarkdownViewer.vue 中的 auto-render 处理。
+   * 【关键】LaTeX 公式在 marked 解析阶段直接转换为 KaTeX HTML，
+   * 不再需要后续的 auto-render 处理。
    *
    * @param {string} markdownText 原始 Markdown（含 LaTeX 公式）
    * @returns {string} 安全的 HTML 字符串
@@ -151,13 +219,22 @@ export function useMarkdown() {
     if (!markdownText) return ''
 
     try {
-      // Step 1: markdown-it 渲染 Markdown → HTML
-      //   注意：LaTeX 公式（$...$ / $$...$$）不会被解析，会原样出现在 HTML 中
-      //   示例：输入 "$E = mc^2$" → 输出 "<p>$E = mc^2$</p>"
-      const rawHtml = md.render(markdownText)
+      // Step 1: 提取并渲染公式
+      //   - 匹配所有 $...$ 和 $$...$$
+      //   - 直接用 katex.renderToString() 渲染
+      //   - 用占位符替换公式，保护它们不被 Markdown 处理
+      const { text: protectedText, formulas } = extractAndRenderFormulas(markdownText)
 
-      // Step 2: DOMPurify 净化 HTML（XSS 防护）
-      return sanitize(rawHtml)
+      // Step 2: marked 解析 Markdown
+      //   公式已被占位符保护，不会被 Markdown 解析器干扰
+      const rawHtml = marked.parse(protectedText)
+
+      // Step 3: 恢复公式
+      //   将占位符替换为 KaTeX HTML
+      const htmlWithFormulas = restoreFormulas(rawHtml, formulas)
+
+      // Step 4: DOMPurify 净化 HTML（XSS 防护）
+      return sanitize(htmlWithFormulas)
     } catch (err) {
       console.error('[useMarkdown] 解析失败:', err)
       return `<p style="color:#ef4444">解析失败: ${err.message}</p>`
@@ -174,25 +251,19 @@ export function useMarkdown() {
     if (!markdownText) return []
     const headings = []
     try {
-      const env = {}
-      const tokens = md.parse(markdownText, env)
-      for (let i = 0; i < tokens.length; i++) {
-        if (tokens[i].type === 'heading_open') {
-          const depth = parseInt(tokens[i].tag.slice(1))
-          const inlineToken = tokens[i + 1]
-          if (inlineToken && inlineToken.type === 'inline') {
-            const text = (inlineToken.children || [])
-              .map(c => c.content)
-              .join('')
-            if (text) {
-              const anchor = makeAnchor(text)
-              headings.push({
-                level: depth,
-                text,
-                anchor,
-                id: `toc-${anchor}-${headings.length}`,
-              })
-            }
+      // marked 18.x 使用 Tokens API
+      const tokens = marked.lexer(markdownText)
+      for (const token of tokens) {
+        if (token.type === 'heading') {
+          const text = token.text
+          if (text) {
+            const anchor = makeAnchor(text)
+            headings.push({
+              level: token.depth,
+              text,
+              anchor,
+              id: `toc-${anchor}-${headings.length}`,
+            })
           }
         }
       }
