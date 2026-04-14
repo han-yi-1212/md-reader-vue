@@ -1,0 +1,10 @@
+# GitHub Token (for internal use)
+*.tar.gz
+.DS_Store
+Thumbs.db
+node_modules/
+dist/
+*.log
+.env*
+.vscode/
+!.vscode/extensions.json
